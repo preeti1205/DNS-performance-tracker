@@ -84,7 +84,7 @@ int main(int argc, char* argv[]) {
 			tracker.stopTracking();
 			cout << "Type exit to exit or ";
 		}
-		else if(input == "site"){
+		else if(input == "sites"){
 			listWebsites(tracker);
 		}
 		else if(input == "setf"){

@@ -1,3 +1,8 @@
+/*
+This class periodically sends DNS queries to the name servers of sites 
+and stores the latency values in a MySQL table. 
+The frequency of queries can be specified by the user on command line.
+*/
 #include "DNSPerfTracker.h"
 
 #include <vector>
@@ -11,6 +16,11 @@
 
 std::mutex mtx;
 
+//generate a random string to append with the url
+//Input:
+//		len : length of the string desired
+//Output:
+//		string str: randomly generated string of size len
 std::string gen_random_string(const int len) {
 	srand(time(0));
 	auto randchar = []() -> char
@@ -27,18 +37,39 @@ std::string gen_random_string(const int len) {
     return str;
 }
 
+//calculate new average value
+//Input:
+//		double oldVal: old average value
+//      double newVal: new data to be accounted for in the calculation 
+//		double count:  new total count including newVal
+//Output:
+//		double : new average value
+
 double calculateNewAvg(double oldVal, double newVal, double count){
 	return (oldVal + (newVal - oldVal) / count);
 }
 
+//calculate new standard deviation
+//Input:
+//		double oldAvg: old average value
+//		double oldVal: old standard deviation
+//      double newVal: new data to be accounted for in the calculation 
+//		double count:  new total count including newVal
+//Output:
+//		double : new standard deviation
 double calculateNewStdDev(double oldAvg, double oldVal, double newVal, double count){
 	double newAvg = calculateNewAvg(oldVal, newVal, count);
 	// TODO: Check for case where denominator is 0
 	return sqrt(((count - 2)* pow(oldVal, 2) + (newVal - newAvg)*(newVal - oldAvg)) / (count - 1));
 }
 
+//constructor initializing with default frequency of 60 queries per minute
 DNSPerfTracker::DNSPerfTracker(): frequency(60), isRunning(false) {}
 
+
+//change the frequency of queries
+//Input:
+//		int perMinute: new frequency to be set
 void DNSPerfTracker::setFrequency(int perMinute){
 	if(perMinute <= 0 ) {
 		std::cout << " Only values greater than 0 accepted ";
@@ -47,10 +78,17 @@ void DNSPerfTracker::setFrequency(int perMinute){
 		frequency = perMinute;
 }
 
+//obtain the current frequency of queries
+//Output:
+//		unsigned int perMinute: current frequency
 unsigned int DNSPerfTracker::getFrequency() const{
 	return frequency;
 }
 
+//prepare the database and populate DNSPerfTracker::siteNames and DNSPerfTracker::records
+//existing values in the database
+//Input:
+//		string setupFile: configuration file to read database information from
 void DNSPerfTracker::prepareDependencies(std::string setupFile){
 	try{
 		dbMan = new dbManager(setupFile);
@@ -67,6 +105,12 @@ void DNSPerfTracker::prepareDependencies(std::string setupFile){
 		std::cout << "Error occured while setting up the database" << std::endl;
 	}
 }
+
+//send ldns packet to the website address to measure latency
+//Input:
+//		const char siteName[]: name of the url
+//Output:
+//		int latency: latency
 
 int DNSPerfTracker::ldnsLatency(const char siteName[]) {
 	ldns_resolver *res;
@@ -108,6 +152,11 @@ int DNSPerfTracker::ldnsLatency(const char siteName[]) {
 	return latency;
 }
 
+//get latency of the website 
+//Input:
+//		string siteName: name of the url
+//Output:
+//		int latency: latency
 int DNSPerfTracker::getLatency(std::string siteName) {
 	std::string random_string = gen_random_string(10);
 	std::string randSiteName( random_string + "." + siteName ); 
@@ -115,6 +164,23 @@ int DNSPerfTracker::getLatency(std::string siteName) {
 	return latency;
 }
 
+//find a url entry in DNSPerfTracker::records
+//Input:
+//		string site: name of the url to be searched
+//Output:
+//		std::vector<entry>::iterator it: iterator pointing to the entry
+std::vector<entry>::iterator DNSPerfTracker::findEntry(std::string site) {
+	std::vector<entry>::iterator it;
+	for(it = records.begin(); it != records.end(); ++it){
+		if(it->website == site)
+			return it;
+	}
+	return it;
+}
+
+//add a website url to DNSPerfTracker::siteNames(and database names)
+//Input:
+//		string site: name of the url to be added
 void DNSPerfTracker::addSite(std::string siteName){
 	if(siteNames.find(siteName) == siteNames.end()) {
 		siteNames.insert(make_pair(siteName, true));
@@ -122,14 +188,32 @@ void DNSPerfTracker::addSite(std::string siteName){
 	}
 }
 
-// void DNSPerfTracker::removeSite(std::string siteName){
-// 	auto it = siteNames.find(siteName);
-// 	if(it != siteNames.end()) {
-// 		siteNames.erase(make_pair(siteName, true));
-// 		dbMan->addWebsite(siteName);
-// 	}
-// }
+//remove a website url from DNSPerfTracker::siteNames and all corresponding records 
+// from DNSPerfTracker::records (and database names and records)
+//Input:
+//		string site: name of the url to be removed
+void DNSPerfTracker::removeSite(std::string siteName){
+	mtx.lock();
 
+	auto i = records.begin();
+	while( i != records.end()) {
+		std::vector<entry>::iterator ent = findEntry(siteName);
+		if(ent != records.end()) {
+			i = records.erase(ent);
+		}
+		else
+			++i;
+	}
+
+	auto it = siteNames.find(siteName);
+	if(it != siteNames.end()) {
+		siteNames.erase(it);
+	}
+	mtx.unlock();
+	dbMan->removeWebsite(siteName);
+}
+
+//add top 10 websites to DNSPerfTracker::siteNames
 void DNSPerfTracker::addAlexaWebsites(){
 	std::string website_array[10] = {   "google.com",
 		                                "youtube.com",
@@ -147,15 +231,17 @@ void DNSPerfTracker::addAlexaWebsites(){
 	}
 }
 
-std::vector<entry>::iterator DNSPerfTracker::findEntry(std::string site) {
-	std::vector<entry>::iterator it;
-	for(it = records.begin(); it != records.end(); ++it){
-		if(it->_website == site)
-			return it;
-	}
-	return it;
+//remove all the data from DNSPerfTracker::records and DNSPerfTracker::siteNames
+void DNSPerfTracker::resetAll(){
+	mtx.lock();
+	isRunning = false;
+	siteNames.clear();
+	records.clear();
+	mtx.unlock();
+	dbMan->resetDB();
 }
 
+//perform tracking
 void DNSPerfTracker::performTracking(){
 	while(isRunning){
 		mtx.lock();
@@ -169,20 +255,20 @@ void DNSPerfTracker::performTracking(){
 		    dbMan->insertRecord(it->first, currTimestamp, latency);
 		    std::vector<entry>::iterator ent = findEntry(it->first);
 		    if( ent != records.end()) {
-		    	ent->_last_query_timestamp = currTimestamp;
-		    	(ent->_total_queries)++;
-		    	double oldAvg = ent->_avg_latency;
-		    	double oldStdDev = ent->_stddev_latency;
-		    	ent->_avg_latency = calculateNewAvg(oldAvg, latency, ent->_total_queries);
-		    	ent->_stddev_latency = calculateNewStdDev(oldAvg, oldStdDev, latency, ent->_total_queries);
+		    	ent->last_query_timestamp = currTimestamp;
+		    	(ent->total_queries)++;
+		    	double oldAvg = ent->avg_latency;
+		    	double oldStdDev = ent->stddev_latency;
+		    	ent->avg_latency = calculateNewAvg(oldAvg, latency, ent->total_queries);
+		    	ent->stddev_latency = calculateNewStdDev(oldAvg, oldStdDev, latency, ent->total_queries);
 		    }
 		    else {
 		    	entry newEntry(it->first);
-		    	newEntry._total_queries = 1;
-		    	newEntry._first_query_timestamp = currTimestamp;
-		    	newEntry._last_query_timestamp = currTimestamp;
-		    	newEntry._avg_latency = latency;
-		    	newEntry._stddev_latency = 0;
+		    	newEntry.total_queries = 1;
+		    	newEntry.first_query_timestamp = currTimestamp;
+		    	newEntry.last_query_timestamp = currTimestamp;
+		    	newEntry.avg_latency = latency;
+		    	newEntry.stddev_latency = 0;
 		    	records.push_back(newEntry);
 		    }
 		}
@@ -190,16 +276,21 @@ void DNSPerfTracker::performTracking(){
 	}
 }
 
+//get all the records from DNSPerfTracker::records
+//OUTPUT:
+//		std::vector<entry>: vector of all the entries in the DNSPerfTracker::records
 std::vector<entry> DNSPerfTracker::getStats(){
 	return records;
 }
 
+//stop tracking
 void DNSPerfTracker::stopTracking(){
 	isRunning = false;
 }
 
+//start tracking. If there are no websites to track, add alexa websites to DNSPerfTracker::siteNames
 void DNSPerfTracker::startTracking(){
-	if(!isRunning) {
+	if(!isRunning ) {
 		isRunning = true;
 		if(frequency <= 0) {
 			std::cout << "Please enter a positive frequency ";
@@ -208,10 +299,19 @@ void DNSPerfTracker::startTracking(){
 			std::thread t(&DNSPerfTracker::performTracking, this);
 			t.detach();
 		}
-
 	}
 }
 
+//see if currently tracking
+//OUTPUT:
+// 		bool : true if currently tracking. False otherwise
+bool DNSPerfTracker::getStatus() const{
+	return isRunning;
+}
+
+//get all the names from DNSPerfTracker::siteNames
+//OUTPUT:
+//		vector<string> result: vector of all the urls in the DNSPerfTracker::siteNames
 std::vector<std::string> DNSPerfTracker::getNames() const{
 	std::vector<std::string> result;
 	for(std::unordered_map<std::string, bool>::const_iterator it = siteNames.begin(); it != siteNames.end(); ++it)

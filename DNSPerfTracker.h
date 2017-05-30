@@ -1,3 +1,8 @@
+/*
+This class periodically sends DNS queries to the name servers of sites 
+and stores the latency values in a MySQL table. 
+The frequency of queries can be specified by the user on command line.
+*/
 #ifndef DNS_PERF_TRACKER_H
 #define DNS_PERF_TRACKER_H
 
@@ -14,6 +19,8 @@ public:
 	void setFrequency(int perMinute);
 	unsigned int getFrequency() const;
 	void addSite(std::string siteName);
+	void removeSite(std::string siteName);
+	void resetAll();
 	void addAlexaWebsites();
 	void performTracking();
 	void prepareDependencies(std::string setupFile);
@@ -21,10 +28,11 @@ public:
 	std::vector<std::string> getNames() const;
 	void startTracking();
 	void stopTracking();
+	bool getStatus() const;
 
 private:
 	std::vector<entry> records;
-	std::unordered_map<std::string, bool> siteNames; //TODO : map would be better for large number of entries
+	std::unordered_map<std::string, bool> siteNames; 
 	dbManager* dbMan;
 	int ldnsLatency(const char siteName[]);
 	int getLatency(std::string siteName);
@@ -34,11 +42,3 @@ private:
 };
 #endif
 
-
-// public:
-
-
-// 	void removeAll ();
- 
-
-// 	bool getRunExperiments() const;

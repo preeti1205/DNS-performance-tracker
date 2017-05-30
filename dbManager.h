@@ -1,3 +1,6 @@
+/*
+This class handles all the code interactions with the mysql databases
+*/
 #ifndef DB_MANAGER_H
 #define DB_MANAGER_H
 
@@ -15,6 +18,7 @@ public:
 	void insertRecord(std::string name, unsigned long long timestamp, int latency);
 	void addWebsite(std::string site_name);
 	void removeWebsite(std::string site_name);
+	void resetDB();
 	std::vector<std::string> getWebsites();
 
 private:

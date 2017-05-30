@@ -1,4 +1,4 @@
 db_name=dns_track;
 server_name=localhost;
 user_name=preeti;
-user_passwd=R;
+user_passwd=my_password;

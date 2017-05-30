@@ -1,3 +1,6 @@
+/*
+This class handles all the code interactions with the mysql databases
+*/
 #include <string>
 #include <vector>
 #include <cstdlib>
@@ -9,6 +12,10 @@
 #include "entry.h"
 #include "dbManager.h"
 
+
+// Connect to the database using database information provided in the configuration file
+// Input:
+//        setup: File containing information about database and the user
 dbManager::dbManager(std::string setupFile): conn(false){
 	std::string db_name, server_name, user_name, user_passwd;
 	std::ifstream infile(setupFile);
@@ -20,7 +27,6 @@ dbManager::dbManager(std::string setupFile): conn(false){
 		std::string keyName = str.substr(0, separator);
 		std::string value_of_key = str.substr(separator + 1, terminator - separator - 1);
 
-		//Todo: Refactor this crappy part
 		if(keyName == "db_name") db_name = value_of_key;
 		if(keyName == "server_name") server_name = value_of_key;
 		if(keyName == "user_name") user_name = value_of_key;
@@ -37,7 +43,11 @@ dbManager::dbManager(std::string setupFile): conn(false){
 
 }
 
-//setup the db if it doesn't exist yet
+//sets up the db if it doesn't exist yet
+//Output:
+//		true if the database is being setup for the first time
+//      false if the databse already exists
+
 bool dbManager::prepareDB(){
 	try{
 		mysqlpp::StoreQueryResult result = storeQuery("SHOW TABLES LIKE 'names';");
@@ -45,8 +55,8 @@ bool dbManager::prepareDB(){
 
 			if (result.begin() == result.end()) {
 				std::cout << "Table does not exist" << std::endl;
-				execQuery("CREATE TABLE names (name VARCHAR(250), PRIMARY KEY (name));");  //coz dom name is max 253 char with www and all that
-				execQuery("CREATE TABLE records (name VARCHAR(250), timestamp BIGINT, latency INT, PRIMARY KEY (name,timestamp));");
+				execQuery("CREATE TABLE names (name VARCHAR(50), PRIMARY KEY (name));");  //coz dom name is max 253 char with www and all that
+				execQuery("CREATE TABLE records (name VARCHAR(50), timestamp BIGINT, latency INT, PRIMARY KEY (name,timestamp));");
 				std::cout << "Tables Created." << std::endl;
 				return true; 
 			}
@@ -59,6 +69,9 @@ bool dbManager::prepareDB(){
 	}
 }
 
+//sends data from the records database to DNSPerfTracker class during startup
+//Output:
+//		vector<entry> to be passed on to the program during startup from database records
 std::vector<entry> dbManager::prepareStats(){
 	std::vector<entry> result;
 	try{
@@ -70,11 +83,11 @@ std::vector<entry> dbManager::prepareStats(){
 			for(size_t i = 0; i < res.size(); ++i) {
 				std::string site_name(res[i]["name"]);
 				entry data(site_name);
-				data._avg_latency = atof(res[i]["average"]);
-		        data._stddev_latency = atof(res[i]["stddev"]);
-		        data._total_queries  = atoi(res[i]["count"]);
-				data._first_query_timestamp = strtoull(res[i]["minima"], NULL, 0);
-		        data._last_query_timestamp  = strtoull(res[i]["maxima"], NULL, 0);
+				data.avg_latency = atof(res[i]["average"]);
+		        data.stddev_latency = atof(res[i]["stddev"]);
+		        data.total_queries  = atoi(res[i]["count"]);
+				data.first_query_timestamp = strtoull(res[i]["minima"], NULL, 0);
+		        data.last_query_timestamp  = strtoull(res[i]["maxima"], NULL, 0);
 		        result.push_back(data);
 			}
 		}
@@ -84,6 +97,12 @@ std::vector<entry> dbManager::prepareStats(){
 	}
 	return result;
 }
+
+//inserts a record into records database
+//Input:
+//		string name 					: website url
+//      unsigned long long timestamp    : timestamp when query was made
+//      int latency 					: latency recorded
 
 void dbManager::insertRecord(std::string name, unsigned long long timestamp, int latency) {
 	try {
@@ -98,6 +117,10 @@ void dbManager::insertRecord(std::string name, unsigned long long timestamp, int
 	}
 }
 
+//inserts a new entry into names database
+//Input:
+//		string site_name 					: website url
+
 void dbManager::addWebsite(std::string site_name){
 	try{
 		std::ostringstream osStream;
@@ -110,21 +133,42 @@ void dbManager::addWebsite(std::string site_name){
 
 }
 
+//removes the website url from names database and all the corresponding records from records database
+//Input:
+//		string site_name 					: website url
+
 void dbManager::removeWebsite(std::string site_name){
 	try{
 		std::ostringstream osStream;
-		osStream << "DELETE FROM names where name=\"" << site_name <<"\");";
+		osStream << "DELETE FROM names where name=\"" << site_name <<"\";";
 		execQuery(osStream.str());
 
 		osStream.str(std::string());
-		osStream << "DELETE FROM records where name=\"" << site_name <<"\");";
+		osStream << "DELETE FROM records where name=\"" << site_name <<"\";";
 		execQuery(osStream.str());
 	}
 	catch (char const* dbError){
-		std::cout << "Database error in deleting site name" << dbError << std::endl;
+		std::cout << "Database error in deleting site name. Possibly the url is not in the database. " << dbError << std::endl;
 	}
 }
 
+//empties names and records database
+void dbManager::resetDB(){
+	try{
+		std::ostringstream osStream;
+		osStream << "DELETE FROM names;";
+		execQuery(osStream.str());
+
+		osStream.str(std::string());
+		osStream << "DELETE FROM records;";
+		execQuery(osStream.str());
+	}
+	catch (char const* dbError){
+		std::cout << "Database error in resetting Database " << dbError << std::endl;
+	}
+}
+
+//returns the list of all the websites being tracked (present in the databases)
 std::vector<std::string> dbManager::getWebsites(){
 	std::vector<std::string> result;
 	try{
@@ -145,6 +189,11 @@ std::vector<std::string> dbManager::getWebsites(){
 	return result;
 }
 
+//executes queries with no return type
+//Input:
+//		string query_str	: SQL query to be executed
+//Output:
+//      bool result 		: returns true if query executed successfully
 bool dbManager::execQuery(std::string query_str){
 	mysqlpp::Query query = conn.query(query_str.c_str());
 	bool result = query.exec();
@@ -153,6 +202,11 @@ bool dbManager::execQuery(std::string query_str){
 	return result;
 }
 
+//executes queries with return type
+//Input:
+//		string query_str				: SQL query to be executed
+//Output:
+//      mysqlpp::StoreQueryResult		: StoreQueryResult object containing the resulting data
 mysqlpp::StoreQueryResult dbManager::storeQuery(std::string query_str){
 	mysqlpp::Query query = conn.query(query_str.c_str());
 	mysqlpp::StoreQueryResult result = query.store();

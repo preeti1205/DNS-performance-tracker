@@ -3,9 +3,9 @@
 
 ### Prerequisites:
 
-Use [mysql++](http://tangentsoft.net/mysql++/) to interact with MySQL.
+1) Use [mysql++](http://tangentsoft.net/mysql++/) to interact with MySQL.
  
-Use [ldns](http://www.nlnetlabs.nl/projects/ldns/) for generating DNS queries.
+2) Use [ldns](http://www.nlnetlabs.nl/projects/ldns/) for generating DNS queries.
 
 ### List of commands
 

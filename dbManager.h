@@ -15,6 +15,7 @@ public:
 	void insertRecord(std::string name, unsigned long long timestamp, int latency);
 	void addWebsite(std::string site_name);
 	void removeWebsite(std::string site_name);
+	std::vector<std::string> getWebsites();
 
 private:
 	mysqlpp::Connection conn;

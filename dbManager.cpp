@@ -28,7 +28,7 @@ dbManager::dbManager(std::string setupFile): conn(false){
 	}
 
     if (conn.connect(db_name.c_str(), server_name.c_str(), user_name.c_str(), user_passwd.c_str())){
-    	std::cout << "Connection to the database established ";
+    	std::cout << "Connection to the database established " << std::endl;
     }
     else{
     	std::cout << "Error occured while connecting the database: " << conn.error() << std::endl;
@@ -125,6 +125,26 @@ void dbManager::removeWebsite(std::string site_name){
 	}
 }
 
+std::vector<std::string> dbManager::getWebsites(){
+	std::vector<std::string> result;
+	try{
+		std::ostringstream osStream;
+		osStream << "SELECT * FROM names;";
+		mysqlpp::StoreQueryResult res = storeQuery(osStream.str());
+		if(res) {
+			for(size_t i = 0; i < res.size(); ++i) {
+				std::string str(res[i]["name"]);
+				result.push_back(str);
+			}
+			
+		}
+	}
+	catch (char const* dbError){
+		std::cout << "Database error in getting site names" << dbError << std::endl;
+	}
+	return result;
+}
+
 bool dbManager::execQuery(std::string query_str){
 	mysqlpp::Query query = conn.query(query_str.c_str());
 	bool result = query.exec();
@@ -139,8 +159,4 @@ mysqlpp::StoreQueryResult dbManager::storeQuery(std::string query_str){
 	if (!result)
 		throw query.error();
 	return result;
-}
-
-int main() {
-
 }

@@ -2,26 +2,219 @@
 
 #include <vector>
 #include <string>
+#include <thread>
+#include <stdlib.h>
 #include <ldns/ldns.h>
 #include <time.h>
+#include <chrono>
+#include <mutex>
 
-DNSPerfTracker::DNSPerfTracker(): frequency(60) {}
-DNSPerfTracker::setFrequency(int perMinute){
-	//TODO: add catch for negative values -- see how it works for unsigned int too
-	frequency = perMinute;
+std::mutex mtx;
+
+std::string gen_random_string(const int len) {
+	srand(time(0));
+	auto randchar = []() -> char
+    {
+        const char charset[] =
+        "0123456789"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz";
+        const size_t max_index = (sizeof(charset) - 1);
+        return charset[ rand() % max_index ];
+    };
+    std::string str(len,0);
+    std::generate_n( str.begin(), len, randchar );
+    return str;
 }
 
-DNSPerfTracker::addWebsites(){
-	std::string website_array = {   "google.com",
-	                                "youtube.com",
-								    "facebook.com",
-								    "baidu.com",
-								    "wikipedia.org",
-								    "yahoo.com",
-								    "google.co.in",
-								    "reddit.com",
-								    "qq.com",
-								    "taobao.com" }
-	vector<std::string> websites (website_array, website_array + sizeof(website_array) / sizeof(website_array[0]);
-	records = websites;  //TODO: create a add function to add more websites
+double calculateNewAvg(double oldVal, double newVal, double count){
+	return (oldVal + (newVal - oldVal) / count);
+}
+
+double calculateNewStdDev(double oldAvg, double oldVal, double newVal, double count){
+	double newAvg = calculateNewAvg(oldVal, newVal, count);
+	// TODO: Check for case where denominator is 0
+	return sqrt(((count - 2)* pow(oldVal, 2) + (newVal - newAvg)*(newVal - oldAvg)) / (count - 1));
+}
+
+DNSPerfTracker::DNSPerfTracker(): frequency(60), isRunning(false) {}
+
+void DNSPerfTracker::setFrequency(int perMinute){
+	if(perMinute <= 0 ) {
+		std::cout << " Only values greater than 0 accepted ";
+	}
+	else
+		frequency = perMinute;
+}
+
+unsigned int DNSPerfTracker::getFrequency() const{
+	return frequency;
+}
+
+void DNSPerfTracker::prepareDependencies(std::string setupFile){
+	try{
+		dbMan = new dbManager(setupFile);
+		if(dbMan->prepareDB())
+			addAlexaWebsites();
+		std::vector<std::string> nameList = dbMan->getWebsites();
+		for(size_t i = 0; i < nameList.size(); ++i ){
+			if(siteNames.find(nameList[i]) == siteNames.end())
+				siteNames.insert(make_pair(nameList[i], true));
+		}
+		records = (dbMan->prepareStats());
+	}
+	catch(...) {
+		std::cout << "Error occured while setting up the database" << std::endl;
+	}
+}
+
+int DNSPerfTracker::ldnsLatency(const char siteName[]) {
+	ldns_resolver *res;
+	ldns_rdf *host;
+	ldns_pkt *p;
+	ldns_status s;
+
+	res = NULL;
+	p = NULL;
+	host = NULL;
+
+	double latency = 0;
+
+	/* create a new resolver from /etc/resolv.conf(NULL) */
+	s = ldns_resolver_new_frm_file(&res, NULL);
+	if (s != LDNS_STATUS_OK) {
+		ldns_rdf_deep_free(host);
+		exit(EXIT_FAILURE);
+	}
+	host = ldns_dname_new_frm_str(siteName);
+	if (!host) {
+			exit(EXIT_FAILURE);
+	}
+	else {
+		if (!ldns_dname_str_absolute(siteName) && ldns_dname_absolute(host)) {
+			ldns_rdf_set_size(host, ldns_rdf_size(host) - 1);
+        }
+	    unsigned long long startTime = std::chrono::duration_cast<std::chrono::milliseconds>
+	    							(std::chrono::system_clock::now().time_since_epoch()).count(); //check what this returns
+	    p = ldns_resolver_query(res, host, LDNS_RR_TYPE_A,
+				LDNS_RR_CLASS_IN, LDNS_RD);
+	    unsigned long long endTime = std::chrono::duration_cast<std::chrono::milliseconds>
+	                                 (std::chrono::system_clock::now().time_since_epoch()).count();
+		latency = endTime - startTime;
+		ldns_rdf_deep_free(host);
+	}
+	ldns_resolver_deep_free(res);
+	ldns_pkt_free(p);
+	return latency;
+}
+
+int DNSPerfTracker::getLatency(std::string siteName) {
+	std::string random_string = gen_random_string(10);
+	std::string randSiteName( random_string + "." + siteName ); 
+	int latency = ldnsLatency(randSiteName.c_str());
+	return latency;
+}
+
+void DNSPerfTracker::addSite(std::string siteName){
+	if(siteNames.find(siteName) == siteNames.end()) {
+		siteNames.insert(make_pair(siteName, true));
+		dbMan->addWebsite(siteName);
+	}
+}
+
+// void DNSPerfTracker::removeSite(std::string siteName){
+// 	auto it = siteNames.find(siteName);
+// 	if(it != siteNames.end()) {
+// 		siteNames.erase(make_pair(siteName, true));
+// 		dbMan->addWebsite(siteName);
+// 	}
+// }
+
+void DNSPerfTracker::addAlexaWebsites(){
+	std::string website_array[10] = {   "google.com",
+		                                "youtube.com",
+									    "facebook.com",
+									    "baidu.com",
+									    "wikipedia.org",
+									    "yahoo.com",
+									    "google.co.in",
+									    "reddit.com",
+									    "qq.com",
+									    "taobao.com" };
+	 
+	for(size_t site_idx = 0; site_idx < 10; ++site_idx ) {
+		addSite(website_array[site_idx]);
+	}
+}
+
+std::vector<entry>::iterator DNSPerfTracker::findEntry(std::string site) {
+	std::vector<entry>::iterator it;
+	for(it = records.begin(); it != records.end(); ++it){
+		if(it->_website == site)
+			return it;
+	}
+	return it;
+}
+
+void DNSPerfTracker::performTracking(){
+	while(isRunning){
+		mtx.lock();
+		std::this_thread::sleep_for(std::chrono::milliseconds(1000 * 60 / frequency));
+		std::unordered_map<std::string, bool>::iterator it;
+		for( it = siteNames.begin(); it != siteNames.end(); ++it) {
+
+			int latency = getLatency(it->first);
+		    unsigned long long currTimestamp = std::chrono::duration_cast<std::chrono::milliseconds>
+		                                 (std::chrono::system_clock::now().time_since_epoch()).count();
+		    dbMan->insertRecord(it->first, currTimestamp, latency);
+		    std::vector<entry>::iterator ent = findEntry(it->first);
+		    if( ent != records.end()) {
+		    	ent->_last_query_timestamp = currTimestamp;
+		    	(ent->_total_queries)++;
+		    	double oldAvg = ent->_avg_latency;
+		    	double oldStdDev = ent->_stddev_latency;
+		    	ent->_avg_latency = calculateNewAvg(oldAvg, latency, ent->_total_queries);
+		    	ent->_stddev_latency = calculateNewStdDev(oldAvg, oldStdDev, latency, ent->_total_queries);
+		    }
+		    else {
+		    	entry newEntry(it->first);
+		    	newEntry._total_queries = 1;
+		    	newEntry._first_query_timestamp = currTimestamp;
+		    	newEntry._last_query_timestamp = currTimestamp;
+		    	newEntry._avg_latency = latency;
+		    	newEntry._stddev_latency = 0;
+		    	records.push_back(newEntry);
+		    }
+		}
+		mtx.unlock();
+	}
+}
+
+std::vector<entry> DNSPerfTracker::getStats(){
+	return records;
+}
+
+void DNSPerfTracker::stopTracking(){
+	isRunning = false;
+}
+
+void DNSPerfTracker::startTracking(){
+	if(!isRunning) {
+		isRunning = true;
+		if(frequency <= 0) {
+			std::cout << "Please enter a positive frequency ";
+		}
+		else{
+			std::thread t(&DNSPerfTracker::performTracking, this);
+			t.detach();
+		}
+
+	}
+}
+
+std::vector<std::string> DNSPerfTracker::getNames() const{
+	std::vector<std::string> result;
+	for(std::unordered_map<std::string, bool>::const_iterator it = siteNames.begin(); it != siteNames.end(); ++it)
+		result.push_back(it->first);
+	return result;
 }
